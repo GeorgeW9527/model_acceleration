@@ -3,49 +3,49 @@
 
 ## 开发计划
 ### 1. llama3.2实现
-- weights使用[llama3.2](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)
+- [ ] weights使用[llama3.2](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)
 ### 2. benchmark实现
-- [] speed test (目标平台：cuda)
-- [] memory test
-- [] ppl
-- [] task_eval.py
+- [ ] speed test (目标平台：cuda)
+- [ ] memory test
+- [ ] ppl
+- [ ] task_eval.py
 ### 3. 量化方法实现
-- [] naive quant（W8A8/W4A4）
-- [] smooth quant
-- [] awq
-- [] kv cache量化
+- [ ] naive quant（W8A8/W4A4）
+- [ ] smooth quant
+- [ ] awq
+- [ ] kv cache量化
 ### 4. 内存优化方法实现
-- [] kv cache
-- [] paged attention
-- [] flash attention
+- [ ] kv cache
+- [ ] paged attention
+- [ ] flash attention
 ### 5. 微调技术
-- [] Lora
-- [] QLora
-- [] AdaLora
-- [] fp8/fp4/nf4低显存微调
-- [] spinquant
-- [] (Optional) Prompt Tuning
-- [] (Optional) Prefix Tuning
-- [] (Optional) P-Tuning
+- [ ] Lora
+- [ ] QLora
+- [ ] AdaLora
+- [ ] fp8/fp4/nf4低显存微调
+- [ ] spinquant
+- [ ] (Optional) Prompt Tuning
+- [ ] (Optional) Prefix Tuning
+- [ ] (Optional) P-Tuning
 ### 6. 并行训练优化demo
-- [] 数据并行
-- [] 模型并行
-- [] 流水线并行
-- [] 张量并行
-- [] 序列并行
-- [] 多维混合并行
-- [] 自动并行
-- [] MOE
+- [ ] 数据并行
+- [ ] 模型并行
+- [ ] 流水线并行
+- [ ] 张量并行
+- [ ] 序列并行
+- [ ] 多维混合并行
+- [ ] 自动并行
+- [ ] MOE
 ### 7. 算子优化
-- [] 算子融合
-- [] 高性能算子（deep seek的fp8_gemm）
-- [] 子图融合和替换
+- [ ] 算子融合
+- [ ] 高性能算子（deep seek的fp8_gemm）
+- [ ] 子图融合和替换
 ### 8. 编译优化
-- [] LLVM
-- [] MLIR
-- [] TVM
+- [ ] LLVM
+- [ ] MLIR
+- [ ] TVM
 ## 9. 服务级优化
-- [] Continous Batching
-- [] 动态批处理
-- [] 异步tokenizer/detokenizer
+- [ ] Continous Batching
+- [ ] 动态批处理
+- [ ] 异步tokenizer/detokenizer
 
