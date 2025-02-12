@@ -1,5 +1,5 @@
 # model_acceleration
-大模型加速方法有很多，每个都去看的话，需要看很多工程，也不方便横向对比。那么能否用一个开源模型（比如llama3.2），将所有的加速方法都实现一遍，所有方法的实现都从头开始实现。
+项目介绍：大模型加速方法有很多，每个都去看的话，需要看很多工程，也不方便横向对比。那么能否用一个开源模型（比如llama3.2），将所有的加速方法都实现一遍，所有方法的实现都从头开始实现。
 
 ## 开发计划
 ### 1. llama3.2实现
@@ -8,7 +8,7 @@
 - [ ] speed test (目标平台：cuda)
 - [ ] memory test
 - [ ] ppl
-- [ ] task_eval.py
+- [ ] task_eval
 ### 3. 量化方法实现
 - [ ] naive quant（W8A8/W4A4）
 - [ ] smooth quant
@@ -18,6 +18,7 @@
 - [ ] kv cache
 - [ ] paged attention
 - [ ] flash attention
+- [ ] MQA/GQA/MLA
 ### 5. 微调技术
 - [ ] Lora
 - [ ] QLora
@@ -44,8 +45,12 @@
 - [ ] LLVM
 - [ ] MLIR
 - [ ] TVM
-## 9. 服务级优化
+### 9. 服务级优化
 - [ ] Continous Batching
 - [ ] 动态批处理
 - [ ] 异步tokenizer/detokenizer
 
+## 环境配置
+
+## 参考资料
+- [ ] 入门：https://transformers.run/

@@ -1,0 +1,1 @@
+sbatch --gpus=1 ./run.sh
