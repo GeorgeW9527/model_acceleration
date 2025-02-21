@@ -73,7 +73,7 @@ class LlamaMLP(nn.Module):
         self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config["mlp_bias"])
         self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config["mlp_bias"])
         self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config["mlp_bias"])
-        self.act_fn = nn.SiLU
+        self.act_fn = nn.SiLU()
 
     def forward(self, x):
         down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
@@ -209,7 +209,7 @@ class LlamaModel(nn.Module):
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         
         # 此处没有使用kv cache,因此每次都需要计算整个score矩阵 ,因此需要一个完整的mask
-        attention_mask = torch.full((position_ids.shape[0], position_ids.shape[0]), float("-inf"), device=inputs_embeds.device).triu_(1)
+        attention_mask = torch.full((position_ids.shape[1], position_ids.shape[1]), float("-inf"), device=inputs_embeds.device).triu_(1)
 
         for decoder_layer in self.layers[: config['num_hidden_layers']]:
             layer_outputs = decoder_layer(
@@ -264,7 +264,10 @@ def sample(logits, temperature: float = 1.0):
     """
     logits = logits / max(temperature, 1e-5)
     probs = torch.softmax(logits, dim=-1)
-    return probs.div_(torch.empty_like(probs).exponential_(1)).argmax(dim=-1)
+
+    res = probs.div_(torch.empty_like(probs).exponential_(1)).argmax(dim=-1)
+
+    return res
 
 
 if __name__ == "__main__":
@@ -273,39 +276,42 @@ if __name__ == "__main__":
     print("create model succ!")
 
     # load weghts
-    # weights_root = "/HOME/scz0101/.cache/huggingface/hub/models--meta-llama--Llama-3.2-3B-Instruct/snapshots/0cb88a4f764b7a12671c53f0838cd831a0843b95"
-    # file1 = os.path.join(weights_root, "model-00001-of-00002.safetensors")
-    # file2 = os.path.join(weights_root, "model-00002-of-00002.safetensors")
-    # model_part1 = load_file(file1)
-    # model_part2 = load_file(file2)
-    # model_state_dict = {**model_part1, **model_part2}
+    weights_root = "/HOME/scz0101/.cache/huggingface/hub/models--meta-llama--Llama-3.2-3B-Instruct/snapshots/0cb88a4f764b7a12671c53f0838cd831a0843b95"
+    file1 = os.path.join(weights_root, "model-00001-of-00002.safetensors")
+    file2 = os.path.join(weights_root, "model-00002-of-00002.safetensors")
+    model_part1 = load_file(file1)
+    model_part2 = load_file(file2)
+    model_state_dict = {**model_part1, **model_part2}
 
-    # print(model.state_dict()["lm_head.weight"].shape)
-    # print(model_state_dict["model.embed_tokens.weight"].shape)
-    # for weight_name in  model.state_dict().keys():
-    #     if weight_name != "lm_head.weight":
-    #         model.state_dict()[weight_name].copy_(model_state_dict[weight_name])
-    #     else:
-    #         model.state_dict()[weight_name].copy_(model_state_dict["model.embed_tokens.weight"])
+    print(model.state_dict()["lm_head.weight"].shape)
+    print(model_state_dict["model.embed_tokens.weight"].shape)
+    for weight_name in  model.state_dict().keys():
+        if weight_name != "lm_head.weight":
+            model.state_dict()[weight_name].copy_(model_state_dict[weight_name])
+        else:
+            model.state_dict()[weight_name].copy_(model_state_dict["model.embed_tokens.weight"])
 
-    # print("load weights succ!")
+    print("load weights succ!")
 
     # run  model  once
     # tokenizer先用transfomer自带的 
-    # model_name_or_path = "meta-llama/Llama-3.2-3B-Instruct"
-    # tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
-    # tokenizer.pad_token = tokenizer.eos_token
-    # input_text = "how are you?"
-    # inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True)
+    model_name_or_path = "meta-llama/Llama-3.2-3B-Instruct"
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
+    tokenizer.pad_token = tokenizer.eos_token
+    input_text = "how are you?"
+    inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True)
 
     past_seen_tokens = 0
     temperature = 1.0
-    position_ids = torch.arange(past_seen_tokens,past_seen_tokens+5).unsqueeze(0)
-    logits = model.forward(torch.tensor([[128000, 5269, 527, 499, 30]], dtype=torch.int32), position_ids)
+    position_ids = torch.arange(past_seen_tokens,past_seen_tokens+inputs["input_ids"].shape[1]).unsqueeze(0)
+    
+    logits = model.forward(inputs["input_ids"], position_ids, logits_to_keep=1)
+    # logits = model.forward(torch.tensor([[128000, 5269, 527, 499, 30]], dtype=torch.int32), position_ids, logits_to_keep=1)
+
     if temperature > 0:
         next_token = sample(logits, temperature)
         print(next_token)
-        # response = tokenizer.decode(next_token, skip_special_tokens=True)
-        # print(response)
+        response = tokenizer.decode(next_token, skip_special_tokens=True)
+        print(response)
 
 
