@@ -49,6 +49,9 @@
 - [ ] Continous Batching
 - [ ] 动态批处理
 - [ ] 异步tokenizer/detokenizer
+### 10. 蒸馏
+- [ ] Deepseek-R1 [蒸馏](https://github.com/agentica-project/deepscaler) 
+
 
 ## 环境配置
 
