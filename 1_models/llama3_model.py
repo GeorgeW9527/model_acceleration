@@ -105,6 +105,12 @@ class LlamaAttention(nn.Module):
             config['num_attention_heads'] * self.head_dim, config['hidden_size'], bias=config['attention_bias']
         )
 
+        ## add kv cache
+        max_batch_size = 1
+        max_seq_len = 512
+        self.register_buffer("k_cache", torch.zeros(max_batch_size, max_seq_len, config['num_key_value_heads'], self.head_dim), persistent=False)
+        self.register_buffer("v_cache", torch.zeros(max_batch_size, max_seq_len, config['num_key_value_heads'], self.head_dim), persistent=False)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -269,6 +275,42 @@ def sample(logits, temperature: float = 1.0):
 
     return res
 
+@torch.inference_mode()
+def generate(
+    model: LlamaForCausalLM,
+    prompt_tokens: List[List[int]],
+    max_new_tokens: int,
+    eos_id: int,
+    temperature: float = 1.0
+) -> List[List[int]]:
+    prompt_lens = [len(t) for t in prompt_tokens]
+    assert max(prompt_lens) <= model.max_seq_len
+    total_len = min(model.max_seq_len, max_new_tokens + max(prompt_lens))
+    tokens = torch.full((len(prompt_tokens), total_len), -1, dtype=torch.long, device="cuda")
+    for i, t in enumerate(prompt_tokens):
+        tokens[i, :len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
+    prev_pos = 0
+    finished = torch.tensor([False] * len(prompt_tokens), device="cuda")
+    prompt_mask = tokens != -1
+    for cur_pos in range(min(prompt_lens), total_len):
+        logits = model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
+        if temperature > 0:
+            next_token = sample(logits, temperature)
+        else:
+            next_token = logits.argmax(dim=-1)
+        next_token = torch.where(prompt_mask[:, cur_pos], tokens[:, cur_pos], next_token)
+        tokens[:, cur_pos] = next_token
+        finished |= torch.logical_and(~prompt_mask[:, cur_pos], next_token == eos_id)
+        prev_pos = cur_pos
+        if finished.all():
+            break
+    completion_tokens = []
+    for i, toks in enumerate(tokens.tolist()):
+        toks = toks[prompt_lens[i]:prompt_lens[i]+max_new_tokens]
+        if eos_id in toks:
+            toks = toks[:toks.index(eos_id)]
+        completion_tokens.append(toks)
+    return completion_tokens
 
 if __name__ == "__main__":
     from safetensors.torch import load_file
@@ -298,11 +340,12 @@ if __name__ == "__main__":
     model_name_or_path = "meta-llama/Llama-3.2-3B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
-    input_text = "how are you?"
+    input_text = "how are you? I'm"
     inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True)
 
     past_seen_tokens = 0
-    temperature = 1.0
+    temperature = 0
+    # max_new_tokens = 512
     position_ids = torch.arange(past_seen_tokens,past_seen_tokens+inputs["input_ids"].shape[1]).unsqueeze(0)
     
     logits = model.forward(inputs["input_ids"], position_ids, logits_to_keep=1)
@@ -310,8 +353,14 @@ if __name__ == "__main__":
 
     if temperature > 0:
         next_token = sample(logits, temperature)
-        print(next_token)
-        response = tokenizer.decode(next_token, skip_special_tokens=True)
-        print(response)
+    else:
+        next_token = logits.argmax(dim=-1)
+    print(next_token)
+    response = tokenizer.decode(next_token[0], skip_special_tokens=True)
+    print(response)
+
+    # completion_tokens = generate(model, inputs["input_ids"], max_new_tokens, tokenizer.eos_token_id, temperature)
+    # completion = tokenizer.decode(completion_tokens[0], skip_special_tokens=True)
+    # print(completion)
 
 

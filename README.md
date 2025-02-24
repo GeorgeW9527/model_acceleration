@@ -1,7 +1,11 @@
 # model_acceleration
 项目介绍：大模型加速方法有很多，每个都去看的话，需要看很多工程，也不方便横向对比。那么能否用一个开源模型（比如llama3.2），将所有的加速方法都实现一遍，所有方法的实现都从头开始实现。
 
-## 开发计划
+## 开发原则
+第一阶段：奠定基础
+    可以根据自己感兴趣的topic，在对应的目录下建立自己的ipynb或者py。根据自己的需求进行对比测试。
+第二阶段：整合方法
+
 ### 1. llama3.2实现
 - [ ] weights使用[llama3.2](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)
 ### 2. benchmark实现
@@ -54,6 +58,7 @@
 
 
 ## 环境配置
+
 
 ## 参考资料
 - [ ] 入门：https://transformers.run/
