@@ -8,7 +8,7 @@ import math
 import torch.nn.functional as F
 from kernels.llama3_kernel import apply_rotary_pos_emb, get_inv_freq_llama3, sdpa_attention_forward
 
-with open("/HOME/scz0101/run/model_acceleration/models/config.json", "r") as f:
+with open("/HOME/scz0101/run/model_acceleration/1_models/config.json", "r") as f:
     config = json.load(f)
 # 创建rms_norm层，tensor2维，对每一行做归一化
 
@@ -104,12 +104,6 @@ class LlamaAttention(nn.Module):
         self.o_proj = nn.Linear(
             config['num_attention_heads'] * self.head_dim, config['hidden_size'], bias=config['attention_bias']
         )
-
-        ## add kv cache
-        max_batch_size = 1
-        max_seq_len = 512
-        self.register_buffer("k_cache", torch.zeros(max_batch_size, max_seq_len, config['num_key_value_heads'], self.head_dim), persistent=False)
-        self.register_buffer("v_cache", torch.zeros(max_batch_size, max_seq_len, config['num_key_value_heads'], self.head_dim), persistent=False)
 
     def forward(
         self,
@@ -208,7 +202,7 @@ class LlamaModel(nn.Module):
         # if (input_ids is None) ^ (inputs_embeds is not None):
         #     raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
-        inputs_embeds = self.embed_tokens(input_ids)
+        inputs_embeds = self.embed_tokens(input_ids) #b,s,hidden_dim
 
         hidden_states = inputs_embeds
 
