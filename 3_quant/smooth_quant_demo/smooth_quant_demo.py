@@ -10,7 +10,7 @@ In this notebook, we use Llama-2-7B model to demonstrate SmoothQuant can use 8-b
 '''
 
 import os
-
+import copy
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -58,6 +58,17 @@ class Evaluator:
 
         return torch.exp(torch.stack(nlls).sum() / (self.n_samples * 2048))
 
+def selective_release(target_model):
+    # 阶段1：解除引用
+    del target_model
+    # # 强制垃圾回收
+    # gc.collect()
+    torch.cuda.empty_cache()
+    
+    # 阶段3：验证释放结果
+    print(f"当前显存占用：{torch.cuda.memory_allocated()/1024**3:.2f}GB")
+
+
 from datasets import load_dataset
 # import os
 # os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
@@ -81,13 +92,27 @@ ppl_w8a8 = evaluator.evaluate(model_w8a8)
 print(f"Naive W8A8 quantized model perplexity: {ppl_w8a8}")
 
 ## SmoothQuant W8A8 Quantized Model Perplexity
-model = LlamaForCausalLM.from_pretrained(
+model_ori= LlamaForCausalLM.from_pretrained(
     "meta-llama/Llama-3.2-3B-Instruct", torch_dtype=torch.float16, device_map="auto"
 )
-act_scales = torch.load("../act_scales/llama-2-7b.pt")
-smooth_lm(model, act_scales, 0.85)
-model_smoothquant_w8a8 = quantize_llama_like(model)
-print(model_smoothquant_w8a8)
+act_scales = torch.load("./act_scales/llama_3.2_3b.pt")
 
-ppl_smoothquant_w8a8 = evaluator.evaluate(model_smoothquant_w8a8)
-print(f"SmoothQuant W8A8 quantized model perplexity: {ppl_smoothquant_w8a8}")
+for alpha in [0.5, 0.6, 0.7, 0.8]:
+    model = copy.deepcopy(model_ori)
+    smooth_lm(model, act_scales, alpha)
+    model_smoothquant_w8a8 = quantize_llama_like(model)
+    print(model_smoothquant_w8a8)
+
+    ppl_smoothquant_w8a8 = evaluator.evaluate(model_smoothquant_w8a8)
+    print(f"SmoothQuant W8A8 quantized with aplha {alpha} model perplexity: {ppl_smoothquant_w8a8}")
+    selective_release(model)
+
+'''
+
+Original model (fp16) perplexity: 10.612541198730469
+Naive W8A8 quantized model perplexity: 10.581432342529297
+SmoothQuant W8A8 quantized with aplha 0.5 model perplexity: 10.594319343566895
+SmoothQuant W8A8 quantized with aplha 0.6 model perplexity: 10.593501091003418
+SmoothQuant W8A8 quantized with aplha 0.7 model perplexity: 10.585674285888672
+SmoothQuant W8A8 quantized with aplha 0.8 model perplexity: 10.570932388305664
+'''

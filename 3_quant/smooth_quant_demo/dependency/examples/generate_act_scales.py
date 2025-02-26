@@ -25,13 +25,13 @@ def parse_args():
     parser.add_argument(
         "--output-path",
         type=str,
-        default="act_scales/opt-1.3b.pt",
+        default="act_scales/llama_3.2_3b.pt",
         help="where to save the act scales",
     )
     parser.add_argument(
         "--dataset-path",
         type=str,
-        default="dataset/val.jsonl.zst",
+        default="datasets/val.jsonl.zst",
         help="location of the calibration dataset, we use the validation set of the Pile dataset",
     )
     parser.add_argument("--num-samples", type=int, default=512)
