@@ -8,12 +8,18 @@ import math
 import torch.nn.functional as F
 from kernels.llama3_kernel import apply_rotary_pos_emb, get_inv_freq_llama3, sdpa_attention_forward
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+debug = 0
 with open("/HOME/scz0101/run/model_acceleration/1_models/config.json", "r") as f:
     config = json.load(f)
-# 创建rms_norm层，tensor2维，对每一行做归一化
+
+max_bs = 1
+max_seq_len = 512
+if debug:
+    config["num_hidden_layers"] = 1
 
 class LlamaRotaryEmbedding(nn.Module):
-    def __init__(self, device=None):
+    def __init__(self):
         super().__init__()
         # BC: "rope_type" was originally "type"
 
@@ -82,9 +88,10 @@ class LlamaMLP(nn.Module):
 class LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, layer_idx: int):
+    def __init__(self, layer_idx: int, use_cache=True):
         super().__init__()
         self.config = config
+        self.use_cache = use_cache
         self.layer_idx = layer_idx
         self.head_dim = config["head_dim"]
         self.num_key_value_groups = config["num_attention_heads"] // config["num_key_value_heads"]
@@ -105,21 +112,44 @@ class LlamaAttention(nn.Module):
             config['num_attention_heads'] * self.head_dim, config['hidden_size'], bias=config['attention_bias']
         )
 
+        # 初始化KV缓存
+        if self.use_cache:
+            self.register_buffer("k_cache", torch.zeros(max_bs, config['num_key_value_heads'], max_seq_len, self.head_dim),persistent=False)
+            self.register_buffer("v_cache", torch.zeros(max_bs, config['num_key_value_heads'], max_seq_len, self.head_dim),persistent=False)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
         position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        attention_mask: Optional[torch.Tensor]
+        attention_mask: Optional[torch.Tensor],
+        start_pos: int
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        bsz, seqlen , _ = hidden_states.size()
+        end_pos = start_pos + seqlen
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
         query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        # hidden_states bs, seqlen, hidden_dim
+        # self.q_proj(hidden_states) bs, seqlen, num_heads*head_dims
+        # self.q_proj(hidden_states).view(hidden_shape) bs, seqlen, num_heads, head_dim
+        # value_states bs, num_heads, seqlen, head_dim
+        if self.use_cache:
+            # print("key_states", key_states) #bs, num_heads, seqlen, head_dims
+            # print("value_states", value_states) #bs, num_heads, seqlen, head_dims
+
+            self.k_cache[:bsz, :, start_pos:end_pos] = key_states
+            self.v_cache[:bsz, :, start_pos:end_pos] = value_states
 
         cos, sin = position_embeddings
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if self.use_cache:
+            query_states, key_states = apply_rotary_pos_emb(query_states, self.k_cache[:bsz, :, :end_pos], cos, sin)
+            value_states = self.v_cache[:bsz, :, :end_pos]
+        else:
+            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         attn_output, attn_weights = sdpa_attention_forward(
             self,
@@ -150,7 +180,8 @@ class LlamaDecoderLayer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None # necessary, but kept here for BC
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, # necessary, but kept here for BC
+        start_pos: int = 0
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
 
@@ -160,7 +191,8 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states, self_attn_weights = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
-            position_embeddings=position_embeddings
+            position_embeddings=position_embeddings,
+            start_pos=start_pos
         )
         hidden_states = residual + hidden_states
 
@@ -196,12 +228,13 @@ class LlamaModel(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None
+        position_ids: Optional[torch.LongTensor] = None,
+        start_pos: int = 0
     ):
 
         # if (input_ids is None) ^ (inputs_embeds is not None):
         #     raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
-
+        seqlen = position_ids.shape[1]
         inputs_embeds = self.embed_tokens(input_ids) #b,s,hidden_dim
 
         hidden_states = inputs_embeds
@@ -209,13 +242,16 @@ class LlamaModel(nn.Module):
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         
         # 此处没有使用kv cache,因此每次都需要计算整个score矩阵 ,因此需要一个完整的mask
-        attention_mask = torch.full((position_ids.shape[1], position_ids.shape[1]), float("-inf"), device=inputs_embeds.device).triu_(1)
-
+        attention_mask = None
+        if seqlen > 1:
+            attention_mask = torch.full((seqlen, seqlen), float("-inf"), device=inputs_embeds.device).triu_(1)
+        
         for decoder_layer in self.layers[: config['num_hidden_layers']]:
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
-                position_embeddings=position_embeddings
+                position_embeddings=position_embeddings,
+                start_pos = start_pos
             )
 
             hidden_states = layer_outputs[0]
@@ -235,13 +271,15 @@ class LlamaForCausalLM(nn.Module):
         self,
         input_ids: torch.LongTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
-        logits_to_keep: Union[int, torch.Tensor] = 0
+        logits_to_keep: Union[int, torch.Tensor] = 1,
+        start_pos: int = 0
     ):
-
+        position_ids = torch.arange(start_pos,start_pos+input_ids.shape[1]).unsqueeze(0).to(device)
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
-            position_ids=position_ids
+            position_ids=position_ids,
+            start_pos=start_pos
         )
 
         hidden_states = outputs
@@ -278,23 +316,27 @@ def generate(
     temperature: float = 1.0
 ) -> List[List[int]]:
     prompt_lens = [len(t) for t in prompt_tokens]
-    assert max(prompt_lens) <= model.max_seq_len
-    total_len = min(model.max_seq_len, max_new_tokens + max(prompt_lens))
-    tokens = torch.full((len(prompt_tokens), total_len), -1, dtype=torch.long, device="cuda")
+    assert max(prompt_lens) <= max_seq_len
+    total_len = min(max_seq_len, max_new_tokens + max(prompt_lens))
+    tokens = torch.full((len(prompt_tokens), total_len), -1, dtype=torch.long, device=device)
     for i, t in enumerate(prompt_tokens):
-        tokens[i, :len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
+        tokens[i, :len(t)] = torch.tensor(t, dtype=torch.long, device=device)
     prev_pos = 0
-    finished = torch.tensor([False] * len(prompt_tokens), device="cuda")
+    finished = torch.tensor([False] * len(prompt_tokens), device=device)
     prompt_mask = tokens != -1
     for cur_pos in range(min(prompt_lens), total_len):
-        logits = model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
+        logits = model.forward(input_ids = tokens[:, prev_pos:cur_pos], start_pos=prev_pos)
         if temperature > 0:
             next_token = sample(logits, temperature)
         else:
             next_token = logits.argmax(dim=-1)
         next_token = torch.where(prompt_mask[:, cur_pos], tokens[:, cur_pos], next_token)
+        # print(next_token)
         tokens[:, cur_pos] = next_token
-        finished |= torch.logical_and(~prompt_mask[:, cur_pos], next_token == eos_id)
+        # print(next_token == eos_id)
+        # print((~prompt_mask[:, cur_pos]).shape)
+
+        finished |= torch.logical_and(~prompt_mask[:, cur_pos], next_token[:,0] == eos_id)
         prev_pos = cur_pos
         if finished.all():
             break
@@ -308,53 +350,73 @@ def generate(
 
 if __name__ == "__main__":
     from safetensors.torch import load_file
-    model = LlamaForCausalLM()
+    with torch.device(device):
+        model = LlamaForCausalLM()
     print("create model succ!")
 
     # load weghts
-    weights_root = "/HOME/scz0101/.cache/huggingface/hub/models--meta-llama--Llama-3.2-3B-Instruct/snapshots/0cb88a4f764b7a12671c53f0838cd831a0843b95"
-    file1 = os.path.join(weights_root, "model-00001-of-00002.safetensors")
-    file2 = os.path.join(weights_root, "model-00002-of-00002.safetensors")
-    model_part1 = load_file(file1)
-    model_part2 = load_file(file2)
-    model_state_dict = {**model_part1, **model_part2}
+    if not debug:
+        weights_root = "/HOME/scz0101/.cache/huggingface/hub/models--meta-llama--Llama-3.2-3B-Instruct/snapshots/0cb88a4f764b7a12671c53f0838cd831a0843b95"
+        file1 = os.path.join(weights_root, "model-00001-of-00002.safetensors")
+        file2 = os.path.join(weights_root, "model-00002-of-00002.safetensors")
+        model_part1 = load_file(file1)
+        model_part2 = load_file(file2)
+        model_state_dict = {**model_part1, **model_part2}
 
-    print(model.state_dict()["lm_head.weight"].shape)
-    print(model_state_dict["model.embed_tokens.weight"].shape)
-    for weight_name in  model.state_dict().keys():
-        if weight_name != "lm_head.weight":
-            model.state_dict()[weight_name].copy_(model_state_dict[weight_name])
-        else:
-            model.state_dict()[weight_name].copy_(model_state_dict["model.embed_tokens.weight"])
+        print(model.state_dict()["lm_head.weight"].shape)
+        print(model_state_dict["model.embed_tokens.weight"].shape)
+        for weight_name in  model.state_dict().keys():
+            if weight_name != "lm_head.weight":
+                model.state_dict()[weight_name].copy_(model_state_dict[weight_name])
+            else:
+                model.state_dict()[weight_name].copy_(model_state_dict["model.embed_tokens.weight"])
 
-    print("load weights succ!")
+        print("load weights succ!")
 
-    # run  model  once
     # tokenizer先用transfomer自带的 
     model_name_or_path = "meta-llama/Llama-3.2-3B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
-    input_text = "how are you? I'm"
-    inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True)
+    print("create tokenizer succ!")
+    ## run  model  once
+    # input_text = "how are you? I'm"
+    # inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True)
 
-    past_seen_tokens = 0
-    temperature = 0
-    # max_new_tokens = 512
-    position_ids = torch.arange(past_seen_tokens,past_seen_tokens+inputs["input_ids"].shape[1]).unsqueeze(0)
+    # past_seen_tokens = 0
+    # temperature = 0
+    # # max_new_tokens = 512
+    # position_ids = torch.arange(past_seen_tokens,past_seen_tokens+inputs["input_ids"].shape[1]).unsqueeze(0)
     
-    logits = model.forward(inputs["input_ids"], position_ids, logits_to_keep=1)
-    # logits = model.forward(torch.tensor([[128000, 5269, 527, 499, 30]], dtype=torch.int32), position_ids, logits_to_keep=1)
+    # logits = model.forward(inputs["input_ids"], position_ids, logits_to_keep=1)
+    # # logits = model.forward(torch.tensor([[128000, 5269, 527, 499, 30]], dtype=torch.int32), position_ids, logits_to_keep=1)
 
-    if temperature > 0:
-        next_token = sample(logits, temperature)
-    else:
-        next_token = logits.argmax(dim=-1)
-    print(next_token)
-    response = tokenizer.decode(next_token[0], skip_special_tokens=True)
-    print(response)
+    # if temperature > 0:
+    #     next_token = sample(logits, temperature)
+    # else:
+    #     next_token = logits.argmax(dim=-1)
+    # print(next_token)
+    # response = tokenizer.decode(next_token[0], skip_special_tokens=True)
+    # print(response)
 
-    # completion_tokens = generate(model, inputs["input_ids"], max_new_tokens, tokenizer.eos_token_id, temperature)
-    # completion = tokenizer.decode(completion_tokens[0], skip_special_tokens=True)
-    # print(completion)
+
+    ## generate response
+    max_new_tokens = 128
+    temperature = 0
+    # 将用户输入添加到消息列表中
+    messages = []
+    prompt = "who are you?"
+    messages.append({"role": "user", "content": prompt})
+    # 生成提示序列
+    # prompt_tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+    inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
+    # 生成新 tokens
+    completion_tokens = generate(model, inputs["input_ids"], max_new_tokens, tokenizer.eos_token_id, temperature)
+    # 解码生成的 tokens
+    completion = tokenizer.decode(completion_tokens[0], skip_special_tokens=True)
+    
+    # 将生成的回复添加到消息列表中
+    messages.append({"role": "assistant", "content": completion})
+    print(messages)
+
 
 

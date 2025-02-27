@@ -26,14 +26,15 @@ def sdpa_attention_forward(
     if hasattr(module, "num_key_value_groups"):
         key = repeat_kv(key, module.num_key_value_groups)
         value = repeat_kv(value, module.num_key_value_groups)
-    # key shape 1,24,5,128
-    # value shape 1,24,5,128
+    # key shape 1,24,5,128  e.g bsz, num_head, seq_len, head_dim
+    # value shape 1,24,5,128 e.g bsz, num_head, seq_len, head_dim
 
-    attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # 增加 num_heads 和 seq_len 维度
-    attention_mask = attention_mask.expand(key.shape[0], key.shape[1], key.shape[2], key.shape[2]) # 1*24*5*5
+
     # print(key.shape[-2])
     causal_mask = attention_mask
-    if attention_mask is not None:
+    if causal_mask is not None:
+        causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)  # 增加 num_heads 和 seq_len 维度
+        causal_mask = causal_mask.expand(key.shape[0], key.shape[1], key.shape[2], key.shape[2]) # 1*24*5*5
         causal_mask = causal_mask[:, :, :, : key.shape[-2]]
 
     # SDPA with memory-efficient backend is bugged with non-contiguous inputs and custom attn_mask for some torch versions

@@ -7,6 +7,8 @@ In this notebook, we use Llama-2-7B model to demonstrate SmoothQuant can use 8-b
 1. 安装pytorch、transformers、Acceleatte
 2. 安装smoothquant`cd srcs/`然后`python setup.py install`
 
+知乎参考: https://zhuanlan.zhihu.com/p/681158646
+
 '''
 
 import os
